@@ -1,0 +1,119 @@
+import os
+
+from pymongo import MongoClient
+import datetime
+import os
+import matplotlib.pyplot as plt
+import time
+
+LON_LAT_TABLE = {
+    0: 512,
+    1: 256,
+    2: 128,
+    3: 64,
+    4: 32,
+    5: 16,
+    6: 8,
+    7: 4,
+    8: 2,
+    9: 1,
+    10: 1 / 2,
+    11: 1 / 4,
+    12: 1 / 8,
+    13: 1 / 16,
+    14: 1 / 32,
+    15: 1 / 64,
+    16: 1 / 128,
+    17: 1 / 256,
+    18: 1 / 512,
+    19: 1 / 1024,
+    20: 1 / 2048,
+    21: 1 / 5096
+}
+def encode(level,lon,lat):
+    lonlatResolution = LON_LAT_TABLE[level]
+    lonInt = int(abs(lon) / lonlatResolution)
+    latInt = int(abs(lat) / lonlatResolution)
+
+    lonBinS = bin(lonInt)[2:]
+    latBinS = bin(latInt)[2:]
+
+    lonBin = '0'*(level-len(lonBinS))+lonBinS
+    latBin = '0' * (level - len(latBinS)) + latBinS
+
+    lonBin = '1'+lonBin if lon>=0 else '0'+lonBin
+    latBin = '1' + latBin if lat >= 0 else '0' + latBin
+
+    geosotcode = ''
+
+    for i in range(len(lonBin)):
+        geosotcode+=lonBin[i]
+        geosotcode+=latBin[i]
+
+    return geosotcode
+
+# 连接带有密码认证的Mongodb,格式如下:
+# mongodb://用户名:密码@服务器地址/数据库名
+client = MongoClient("mongodb://localhost:27017/")
+
+# 创建路由数据库
+tsdb = client["TemporalSpatialDB"]
+
+# 创建全局网格路由表
+typhoontable = tsdb["TYPHOON_TABLE"]
+
+
+def decode(code):
+    level = len(code) // 2
+    codelist = list(code)
+    lonBinS = ''.join(codelist[0:-1:2])
+    latBinS = ''.join(codelist[1::2])
+
+    lonInt = int(lonBinS, 2)
+    latInt = int(latBinS, 2)
+    lonlatResolution = LON_LAT_TABLE[level]
+
+    lonMin = lonInt * lonlatResolution
+    latMin = latInt * lonlatResolution
+
+    if code[0] != '1':
+        lonMin *= (-1)
+    if code[1] != '1':
+        latMin *= (-1)
+    return [[lonMin, lonMin + lonlatResolution], [latMin, latMin + lonlatResolution]]
+
+
+def insert():
+    lons = []
+    lats = []
+
+    cnt = 0
+    for path in os.listdir('./outcode'):
+        if path[0] == '.':
+            continue
+        cnt += 1
+        print(cnt)
+        print(path)
+        infos = path.split('_')
+        geosotcode = infos[0]
+
+        [lonMin, lonMax], [latMin, latMax] = decode(geosotcode)
+
+        lons.append(lonMin)
+        lats.append(latMin)
+
+        dt = datetime.datetime.strptime(infos[1] + ' ' + infos[2], "%Y%m%d %H%M%S")
+
+        fpath = os.path.join('./outcode', path)
+
+        with open(fpath, 'rb') as file:
+            typhoontable.insert_one({
+                'name': path,
+                'geosotcode': geosotcode,
+                'lonMin': float(lonMin),
+                'latMin': float(latMin),
+                'lonMax': float(lonMax),
+                'latMax': float(latMax),
+                'dt': dt,
+                'data': file.read()
+            })
